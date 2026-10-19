@@ -1,0 +1,12 @@
+Интерьерные изображения созданы встроенным image_gen, без API/CLI.
+Это иллюстрации, не фотографии объектов заказчика. Оптимизированы в WebP без изменения композиции.
+Файлы: public/assets/living.webp, public/assets/kitchen.webp, public/assets/office.webp.
+
+living.webp
+Use case: photorealistic-natural. Asset type: wide website hero photo for a Russian premium home cleaning service, and two smaller crops. Primary request: an exceptionally clean, beautiful contemporary living room in warm natural daylight, editorial interior photography, believable lived-in home with immaculate surfaces. Landscape 3:2 wide composition, eye-level camera. Large ivory linen sofa at center-right, soft olive accent chair, warm oak low table with ceramic vase and a single slender branch, cream plaster walls, sheer curtains with tall sunlit window on right, modest brass accents, textured pale rug, subtle shadows. Refined accessible home, peaceful and airy, not ostentatious. Show room across whole picture, no text overlays or words, no logos, no people, no cleaning equipment, no split screen. Green white and muted gold color accents, neutral warm photography, architectural magazine quality. Image is an illustrative aspirational interior, not a claimed client project. Do not render website UI.
+
+kitchen.webp
+Use case: photorealistic-natural. Asset type: clean interior service thumbnail on a Russian cleaning company's website. A beautiful spotless contemporary pale ivory kitchen, with a pale travertine island, warm oak cabinetry, small olive branch in a ceramic vase, subtle brass faucet, warm sunlight, elegantly styled but believable middle-class apartment. Natural architectural editorial photography, generous negative space, landscape 3:2 frame. No people, no text, no logo, no watermark, no website UI. Olive cream and muted gold accents. Illustrative image, not a real client project.
+
+office.webp
+Use case: photorealistic-natural. Asset type: office cleaning service thumbnail on a Russian cleaning company website. A spotless small modern office in soft daylight, warm white walls, pale oak desks, simple neutral office chairs, glass partition, few green plants, clear uncluttered surfaces. Tasteful realistic architectural editorial photography, landscape 3:2 frame. No people, no text, no logos, no watermark, no website UI. Muted green, warm white palette, no exaggerated corporate luxury. Illustrative interior.

@@ -1,0 +1,56 @@
+# Private configuration and credentials
+.env
+.env.*
+/config.local.php
+/config.*.local.php
+/config-*
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+credentials*.json
+
+# Runtime data: retain only the public site content
+/data/*
+!/data/content.json
+/public/uploads/*
+!/public/uploads/.htaccess
+*.sqlite
+*.sqlite3
+*.db
+*.sql
+
+# Dependencies and generated output
+node_modules/
+vendor/
+/dist/
+/build/
+/out/
+/.demo/
+/coverage/
+/.phpunit.cache/
+
+# Local tools and temporary files
+/.openai/
+/.codex/
+/.cache/
+/cache/
+/tmp/
+/temp/
+/work/
+/outputs/
+.DS_Store
+.idea/
+.vscode/
+*.log
+*.tmp
+*.temp
+*.swp
+*~
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.bak
+*.backup
