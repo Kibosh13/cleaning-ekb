@@ -65,9 +65,44 @@ if('IntersectionObserver' in window&&!reduceMotion.matches){
 const form=$('#lead-form');if(!form)return;
 const phone=$('#lead-phone');phone.addEventListener('input',()=>phone.setCustomValidity(''));
 let contacts={};try{contacts=JSON.parse($('#contact-data').textContent)}catch{}
-let csrfToken='';async function token(){const r=await fetch('/api/token.php',{credentials:'same-origin',cache:'no-store'});if(!r.ok)throw Error('Не удалось подготовить форму.');const d=await r.json();csrfToken=d.token;$('#lead-csrf').value=csrfToken;}
+let csrfToken='',submitting=false;
+async function token(){
+ const response=await fetch('/api/token.php',{credentials:'same-origin',cache:'no-store'});
+ if(!response.ok)throw Error('Не удалось подготовить форму.');
+ const data=await response.json();
+ if(typeof data.token!=='string'||!data.token)throw Error('Не удалось подготовить форму.');
+ csrfToken=data.token;$('#lead-csrf').value=csrfToken;
+}
+async function sendBooking(){
+ if(!csrfToken)await token();
+ const post=()=>fetch(form.action,{method:'POST',body:new FormData(form),credentials:'same-origin',headers:{'Accept':'application/json'}});
+ let response=await post();
+ // CSRF is checked before delivery, so only this rejection can safely be retried.
+ if(response.status===403){csrfToken='';await token();response=await post();}
+ const data=await response.json();
+ if(!response.ok||data.ok!==true)throw Error(data.message||'Не удалось отправить заявку.');
+ return data;
+}
 if(!preview)token().catch(()=>{});
-form.addEventListener('submit',async e=>{e.preventDefault();const digits=phone.value.replace(/\D/g,'');if(digits.length<10||digits.length>15){phone.setCustomValidity('Введите номер телефона: от 10 до 15 цифр.');phone.reportValidity();return;}phone.setCustomValidity('');if(!form.reportValidity())return;const status=$('.form-status',form),button=$('button[type=submit]',form),draft=$('#email-draft');status.className='form-status';status.textContent='';draft.hidden=true;
-if(preview){const fd=new FormData(form),service=services.find(s=>s.id===fd.get('service'));const body=`Здравствуйте! Хочу обсудить уборку.\nИмя: ${fd.get('name')}\nТелефон: ${fd.get('phone')}\nУслуга: ${service?.title||'Помогите выбрать'}\nУдобное время для звонка: ${fd.get('time')||'Уточним при звонке'}\n\nДаю согласие на обработку указанных данных для ответа на мою заявку.`;draft.href=`mailto:${contacts.email}?subject=${encodeURIComponent('Заявка на уборку с сайта')}&body=${encodeURIComponent(body)}`;draft.hidden=false;status.textContent='Письмо подготовлено, но ещё не отправлено. Откройте его в почте и нажмите «Отправить».';draft.focus();return;}
-button.disabled=true;status.textContent='Отправляем заявку…';try{if(!csrfToken)await token();const r=await fetch(form.action,{method:'POST',body:new FormData(form),credentials:'same-origin',headers:{'Accept':'application/json'}});const d=await r.json();if(!r.ok||!d.ok){if(r.status===403){csrfToken='';await token();}throw Error(d.message||'Не удалось отправить заявку.');}status.classList.add('success');status.textContent=d.message;form.reset();csrfToken='';goal('lead_sent');token().catch(()=>{});}catch(err){status.classList.add('error');status.textContent=`${err.message||'Не удалось отправить заявку.'} Вы можете позвонить: ${contacts.phone}.`;}finally{button.disabled=false;}});
+form.addEventListener('submit',async event=>{
+ event.preventDefault();if(submitting)return;
+ const digits=phone.value.replace(/\D/g,'');
+ if(digits.length<10||digits.length>15){phone.setCustomValidity('Введите номер телефона: от 10 до 15 цифр.');phone.reportValidity();return;}
+ phone.setCustomValidity('');if(!form.reportValidity())return;
+ const status=$('.form-status',form),button=$('button[type=submit]',form);
+ status.className='form-status';status.textContent='';
+ if(preview){status.textContent='Это демоверсия: отправка заявок пока не подключена. На рабочем сайте заявка будет отправляться этой кнопкой.';return;}
+ const buttonLabel=button.textContent;
+ submitting=true;button.disabled=true;button.textContent='Отправляем…';form.setAttribute('aria-busy','true');
+ status.textContent='Отправляем заявку…';
+ try{
+  const data=await sendBooking();
+  status.classList.add('success');status.textContent=data.message;
+  form.reset();csrfToken='';goal('lead_sent');token().catch(()=>{});
+ }catch(error){
+  status.classList.add('error');status.textContent=`${error.message||'Не удалось отправить заявку.'} Вы можете позвонить: ${contacts.phone}.`;
+ }finally{
+  submitting=false;button.disabled=false;button.textContent=buttonLabel;form.removeAttribute('aria-busy');
+ }
+});
 })();
