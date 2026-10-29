@@ -15,6 +15,16 @@ $$('[data-cookie]').forEach(b=>b.addEventListener('click',()=>{const previous=co
 $('.cookie-settings')?.addEventListener('click',()=>{banner.hidden=false;$('[data-cookie]',banner)?.focus();});
 $$('.main-action').forEach(a=>a.addEventListener('click',()=>goal('request_click')));
 let services=[];try{services=JSON.parse($('#services-data')?.textContent||'[]')}catch{}
+function servicePrice(service){return service.price.includes('[заполнить')?'Стоимость по запросу':`от ${service.price} ${service.price_unit||'₽'}${service.price_context?' · '+service.price_context:''}`;}
+function node(tag,text,className){const element=document.createElement(tag);if(text!==undefined)element.textContent=text;if(className)element.className=className;return element;}
+function priceTable(data){
+ const wrap=node('div',undefined,'price-table-wrap'),table=node('table',undefined,'price-table');
+ table.append(node('caption',data.title));
+ const head=node('thead'),headRow=node('tr');
+ data.columns.forEach(text=>{const cell=node('th',text);cell.scope='col';headRow.append(cell);});head.append(headRow);table.append(head);
+ const body=node('tbody');data.rows.forEach(row=>{const tr=node('tr');row.forEach((text,index)=>{const cell=node(index===0?'th':'td',text);if(index===0)cell.scope='row';tr.append(cell);});body.append(tr);});
+ table.append(body);wrap.append(table);return wrap;
+}
 // Выбор услуги меняет крупное фото и описание, не сбрасывая фильтр.
 let featureRequest=0;
 function selectFeature(id){
@@ -39,11 +49,23 @@ $$('[data-filter]').forEach(button=>button.addEventListener('click',()=>{
  if(first)selectFeature(first);
 }));
 const dialog=$('#service-dialog');let activeService='';
-$$('.service-detail').forEach(b=>b.addEventListener('click',()=>{const s=services.find(x=>x.id===b.dataset.service);if(!s)return;activeService=s.id;$('#dialog-title').textContent=s.title;$('#dialog-description').textContent=s.description;$('#dialog-includes').replaceChildren(...s.includes.map(text=>{const li=document.createElement('li');li.textContent=text;return li;}));$('#dialog-note').textContent=s.note;$('#dialog-note').hidden=!s.note||s.note.includes('[заполнить');$('#dialog-price').textContent=s.price.includes('[заполнить')?'Стоимость согласуем после оценки объёма работ.':`от ${s.price} ₽. Точную стоимость согласуем после оценки объёма работ.`;dialog.setAttribute('aria-labelledby','dialog-title');dialog.showModal();document.body.classList.add('modal-open');}));
+$$('.service-detail').forEach(button=>button.addEventListener('click',()=>{
+ const service=services.find(item=>item.id===button.dataset.service);if(!service)return;activeService=service.id;
+ $('#dialog-title').textContent=service.title;$('#dialog-description').textContent=service.description;
+ const sections=[];
+ if(service.includes.length)sections.push({title:'Что входит в уборку',items:service.includes});
+ sections.push(...(service.sections||[]));
+ $('#dialog-sections').replaceChildren(...sections.map(section=>{const block=node('section',undefined,'service-work-section');block.append(node('h3',section.title));const list=node('ul');section.items.forEach(text=>list.append(node('li',text)));block.append(list);return block;}));
+ $('#dialog-pricing').replaceChildren(...(service.pricing||[]).map(priceTable));
+ $('#dialog-note').textContent=service.note;$('#dialog-note').hidden=!service.note||service.note.includes('[заполнить');
+ $('#dialog-price').textContent=servicePrice(service);
+ dialog.setAttribute('aria-labelledby','dialog-title');dialog.showModal();document.body.classList.add('modal-open');
+}));
 function closeDialog(){dialog?.close();document.body.classList.remove('modal-open');}
 $('.dialog-close')?.addEventListener('click',closeDialog);dialog?.addEventListener('close',()=>document.body.classList.remove('modal-open'));dialog?.addEventListener('click',e=>{const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)closeDialog();});
-function choose(id){const select=$('#lead-service');if(select&&[...select.options].some(o=>o.value===id))select.value=id;}
+function choose(id){const select=$('#lead-service');if(select&&[...select.options].some(o=>o.value===id)){select.value=id;select.dispatchEvent(new Event('change'));}}
 $('#dialog-choose')?.addEventListener('click',()=>{choose(activeService);closeDialog();});
+$('#dialog-extras')?.addEventListener('click',closeDialog);
 $$('[data-select]').forEach(a=>a.addEventListener('click',()=>choose(a.dataset.select)));
 const reduceMotion=window.matchMedia('(prefers-reduced-motion: reduce)');
 const hero=$('.hero-fullscreen'),header=$('.header');
@@ -63,6 +85,13 @@ if('IntersectionObserver' in window&&!reduceMotion.matches){
  elements.forEach((element,index)=>{element.style.setProperty('--reveal-delay',`${(index%3)*70}ms`);observer.observe(element);});
 }
 const form=$('#lead-form');if(!form)return;
+function premisesRequirements(){
+ const gift=$('#lead-service').value==='gift-certificate';
+ $('#premises-fields').hidden=gift;
+ ['#lead-property','#lead-area'].forEach(selector=>{$(selector).required=!gift;$(selector).disabled=gift;});
+ $('#lead-time').disabled=gift;
+}
+$('#lead-service').addEventListener('change',premisesRequirements);premisesRequirements();
 const phone=$('#lead-phone');phone.addEventListener('input',()=>phone.setCustomValidity(''));
 let contacts={};try{contacts=JSON.parse($('#contact-data').textContent)}catch{}
 let csrfToken='',submitting=false;
