@@ -30,14 +30,40 @@ function create_admin(array $config, string $token, string $user, string $passwo
         if (!preg_match('/^[a-zA-Z0-9_.-]{3,60}$/D', $user)) {
             throw new InvalidArgumentException('Логин должен содержать 3–60 латинских букв, цифр или знаков ._-.');
         }
-        if (strlen($password) < 12 || strlen($password) > 72 || !hash_equals($password, $repeat)) {
-            throw new InvalidArgumentException('Введите совпадающие пароли от 12 до 72 байт.');
-        }
+        validate_admin_password($password, $repeat);
         $credentials = ['user' => $user, 'password_hash' => password_hash($password, PASSWORD_DEFAULT)];
         write_json_file(ADMIN_CREDENTIALS, $credentials);
         // The stored credentials close setup even if the now-unused digest cannot be removed.
         @unlink(ADMIN_SETUP_HASH);
         return $credentials;
+    });
+}
+
+function validate_admin_password(string $password, string $repeat): void
+{
+    if (strlen($password) < 12 || strlen($password) > 72 || str_contains($password, "\0")
+        || !hash_equals($password, $repeat)) {
+        throw new InvalidArgumentException('Введите совпадающие пароли длиной от 12 до 72 байт.');
+    }
+}
+
+function change_admin_password(array $config, array $sessionCredentials, string $current, string $password, string $repeat): array
+{
+    return with_data_lock('admin-setup', function () use ($config, $sessionCredentials, $current, $password, $repeat): array {
+        $credentials = admin_credentials($config);
+        if (!hash_equals(admin_session_key($credentials), admin_session_key($sessionCredentials))) {
+            throw new DomainException('Пароль уже изменён. Войдите снова.');
+        }
+        if (strlen($current) > 300 || !password_verify($current, $credentials['password_hash'])) {
+            throw new InvalidArgumentException('Текущий пароль неверен.');
+        }
+        validate_admin_password($password, $repeat);
+        if (password_verify($password, $credentials['password_hash'])) {
+            throw new InvalidArgumentException('Новый пароль должен отличаться от текущего.');
+        }
+        $updated = ['user' => $credentials['user'], 'password_hash' => password_hash($password, PASSWORD_DEFAULT)];
+        write_json_file(ADMIN_CREDENTIALS, $updated);
+        return $updated;
     });
 }
 

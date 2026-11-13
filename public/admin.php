@@ -20,7 +20,7 @@ if ($config['force_https'] && !$local && (empty($_SERVER['HTTPS']) || $_SERVER['
 $tabs = [
     'leads' => 'Заявки', 'general' => 'Общие настройки', 'home' => 'Главная', 'services' => 'Услуги и цены',
     'offers' => 'Акции и доп. услуги', 'about' => 'О компании', 'portfolio' => 'Работы и отзывы',
-    'faq' => 'Вопросы', 'request' => 'Форма заявки', 'documents' => 'Документы',
+    'faq' => 'Вопросы', 'request' => 'Форма заявки', 'documents' => 'Документы', 'account' => 'Учётная запись',
 ];
 $tab = $_GET['tab'] ?? 'leads';
 if (!is_string($tab) || !isset($tabs[$tab])) {
@@ -112,6 +112,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             throw new InvalidArgumentException('Войдите в админку.');
         }
         switch ($action) {
+            case 'change_password':
+                if (!rate_allowed('admin-password', 5, 900)) {
+                    http_response_code(429);
+                    throw new InvalidArgumentException('Слишком много попыток. Повторите через 15 минут.');
+                }
+                $updated = change_admin_password($config, $credentials, post_password('current_password'), post_password('password'), post_password('repeat'));
+                establish_admin_session($updated);
+                admin_redirect('account', 'Пароль изменён. Другие сеансы завершены.');
             case 'save':
                 $schema = admin_schema($tab);
                 $raw = $_POST['values'] ?? null;
@@ -185,7 +193,7 @@ if ($authenticated && $tab === 'leads') {
         $error = 'Не удалось открыть журнал заявок.';
         error_log('Lead journal error: ' . get_class($exception));
     }
-} elseif ($authenticated) {
+} elseif ($authenticated && $tab !== 'account') {
     $schema = admin_schema($tab);
     $editor = [
         'schema' => $schema, 'values' => $editorDraft ?? editor_content($c, $schema),
@@ -265,8 +273,24 @@ function lead_date(string $date): string
         </section>
     <?php else: ?>
         <h1><?= e($tabs[$tab]) ?></h1>
+        <?php if (!empty($credentials['temporary_password']) && $tab !== 'account'): ?>
+            <p class="flash">Вход настроен с временным паролем. <a href="<?= e(admin_link('account')) ?>">Задать свой пароль</a></p>
+        <?php endif; ?>
         <?php if ($tab === 'leads'): ?>
             <?php require ROOT . '/app/admin-leads-view.php'; ?>
+        <?php elseif ($tab === 'account'): ?>
+            <section class="panel login">
+                <h2>Смена пароля</h2>
+                <p>Логин: <strong><?= e($credentials['user']) ?></strong></p>
+                <form method="post">
+                    <?php admin_csrf_field(); ?>
+                    <input type="hidden" name="user" value="<?= e($credentials['user']) ?>" autocomplete="username">
+                    <label>Текущий пароль<input name="current_password" type="password" required autocomplete="current-password" maxlength="300"></label>
+                    <label>Новый пароль<input name="password" type="password" required minlength="12" maxlength="72" autocomplete="new-password"></label>
+                    <label>Повторите новый пароль<input name="repeat" type="password" required minlength="12" maxlength="72" autocomplete="new-password"></label>
+                    <button name="action" value="change_password">Сменить пароль</button>
+                </form>
+            </section>
         <?php else: ?>
             <?php if ($tab === 'home'): ?><p class="muted">Первый экран всегда на месте. Остальные разделы можно переставить или скрыть.</p><?php endif; ?>
             <?php if ($tab === 'documents'): ?><p class="muted">Пустой текст оставляет исходный документ. В своём тексте можно разделить абзацы пустой строкой, а заголовки начать с «## ».</p><?php endif; ?>
