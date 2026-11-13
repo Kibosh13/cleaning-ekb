@@ -1,101 +1,288 @@
 <?php
 declare(strict_types=1);
-require __DIR__.'/../app/bootstrap.php';
-common_headers();header('Cache-Control: no-store');header('X-Robots-Tag: noindex, nofollow');
-start_session();
-$error='';$notice='';
-$local=in_array($_SERVER['REMOTE_ADDR']??'', ['127.0.0.1','::1'],true);
-if($config['force_https'] && !$local && (empty($_SERVER['HTTPS'])||$_SERVER['HTTPS']==='off')) { http_response_code(403);exit('Для входа в админку используйте HTTPS.'); }
-$configured=$config['admin_user']!=='' && $config['admin_password_hash']!=='';
-if($_SERVER['REQUEST_METHOD']==='POST'){
- if(!check_csrf()){http_response_code(403);$error='Сессия обновилась. Повторите действие.';}
- elseif(isset($_POST['logout'])){$_SESSION=[];session_regenerate_id(true);header('Location: /admin.php',true,303);exit;}
- elseif(isset($_POST['login']) && $configured){
-   if(!rate_allowed('admin',5,900)){$error='Слишком много попыток. Повторите через 15 минут.';http_response_code(429);}
-   elseif(is_string($_POST['user']??null) && is_string($_POST['password']??null) && hash_equals($config['admin_user'],$_POST['user']) && password_verify($_POST['password'],$config['admin_password_hash'])){session_regenerate_id(true);$_SESSION['admin']=true;$_SESSION['last_activity']=time();$_SESSION['csrf']=bin2hex(random_bytes(32));header('Location: /admin.php',true,303);exit;}
-   else{$error='Неверный логин или пароль.';http_response_code(401);}
- }
-}
-if(!empty($_SESSION['admin']) && time()-($_SESSION['last_activity']??0)>1800){unset($_SESSION['admin']);$error='Сессия завершена. Войдите снова.';}
-$auth=!empty($_SESSION['admin']) && $configured;
-if($auth)$_SESSION['last_activity']=time();
-$c=content();
-if($auth && $_SERVER['REQUEST_METHOD']==='POST' && check_csrf()) {
- try {
-   if(isset($_POST['save_json'])){
-     $raw=$_POST['content_json']??'';
-     if(!is_string($raw)||strlen($raw)>180000)throw new InvalidArgumentException('Файл слишком большой.');
-     $new=json_decode($raw,true,32,JSON_THROW_ON_ERROR);
-     if(!is_array($new))throw new InvalidArgumentException('Ожидается объект JSON.');
-     save_content($new);$c=content();$notice='Все разделы сохранены.';
-   } elseif(isset($_POST['save'])) {
-     $new=$c;
-     foreach(['brand','hero_title','hero_description','phone','email','area','maps_url','telegram_url','about_title','about_text','about_subtitle','services_intro','services_note','operator_address','guarantee_terms'] as $key){
-       if(!is_string($_POST[$key]??null))throw new InvalidArgumentException('Проверьте поле '.$key);
-       $new[$key]=trim($_POST[$key]);
-     }
-     foreach(['promotion'=>['value','title','description','tagline'],'gift_certificate'=>['title','button'],'request_form'=>['contact_heading','contact_offer']] as $section=>$keys) foreach($keys as $key){
-       if(!is_string($_POST[$section][$key]??null))throw new InvalidArgumentException('Проверьте текст '.$section);
-       $new[$section][$key]=trim($_POST[$section][$key]);
-     }
-     if(!is_array($_POST['about_points']??null)||!is_array($_POST['additional_services']??null))throw new InvalidArgumentException('Проверьте описание компании и дополнительные услуги.');
-     $new['about_points']=[];
-     foreach($_POST['about_points'] as $point){
-       if(!is_string($point['title']??null)||!is_string($point['paragraphs']??null))throw new InvalidArgumentException('Проверьте принцип работы.');
-       $new['about_points'][]=['title'=>trim($point['title']),'paragraphs'=>array_values(array_filter(array_map('trim',explode("\n",$point['paragraphs']))))];
-     }
-     $new['additional_services']=$_POST['additional_services'];
-     foreach($new['services'] as $i=>&$s){
-       foreach(['title','description','price','price_unit','price_context','note'] as $key){if(!is_string($_POST['services'][$i][$key]??null))throw new InvalidArgumentException('Проверьте услугу.');$s[$key]=trim($_POST['services'][$i][$key]);}
-       if(!is_string($_POST['services'][$i]['includes']??null))throw new InvalidArgumentException('Проверьте состав работ.');
-       $s['includes']=array_values(array_filter(array_map('trim',explode("\n",$_POST['services'][$i]['includes']))));
-       if(!is_array($_POST['services'][$i]['sections']??null)||!is_array($_POST['services'][$i]['pricing']??null))throw new InvalidArgumentException('Проверьте состав и цены услуги.');
-       $s['sections']=[];
-       foreach($_POST['services'][$i]['sections'] as $section){
-         if(!is_string($section['title']??null)||!is_string($section['items']??null))throw new InvalidArgumentException('Проверьте группу работ.');
-         $s['sections'][]=['title'=>trim($section['title']),'items'=>array_values(array_filter(array_map('trim',explode("\n",$section['items']))))];
-       }
-       $s['pricing']=$_POST['services'][$i]['pricing'];
-     }unset($s);
-     foreach($new['faq'] as $i=>&$f)foreach(['question','answer'] as $key){if(!is_string($_POST['faq'][$i][$key]??null))throw new InvalidArgumentException('Проверьте FAQ.');$f[$key]=trim($_POST['faq'][$i][$key]);}unset($f);
-     save_content($new);$c=content();$notice='Тексты, цены и FAQ сохранены.';
-   } elseif(isset($_POST['upload'])) {
-     $f=$_FILES['image']??null;
-     if(!$f||$f['error']!==UPLOAD_ERR_OK||$f['size']>5*1024*1024)throw new InvalidArgumentException('Загрузите JPEG, PNG или WebP размером до 5 МБ.');
-     $mime=(new finfo(FILEINFO_MIME_TYPE))->file($f['tmp_name']);
-     $types=['image/jpeg'=>'jpg','image/png'=>'png','image/webp'=>'webp'];
-     $size=@getimagesize($f['tmp_name']);
-     if(!isset($types[$mime])||!$size||$size[0]*$size[1]>20000000||$size['mime']!==$mime)throw new InvalidArgumentException('Нужен корректный JPEG, PNG или WebP до 20 мегапикселей.');
-     $target=$_POST['target']??'';$new=$c;
-     if(!is_string($target))throw new InvalidArgumentException('Выберите изображение.');
-     if(!in_array($target,['hero_image','about_image'],true) && !preg_match('/^service-([0-9]+)$/D',$target))throw new InvalidArgumentException('Неизвестное место изображения.');
-     if(str_starts_with($target,'service-')&&!isset($new['services'][(int)substr($target,8)]))throw new InvalidArgumentException('Услуга не найдена.');
-     $path='/uploads/'.bin2hex(random_bytes(16)).'.'.$types[$mime];
-     if(!move_uploaded_file($f['tmp_name'],__DIR__.$path))throw new RuntimeException('Нет прав записи в public/uploads.');
-     chmod(__DIR__.$path,0644);
-     if(str_starts_with($target,'service-'))$new['services'][(int)substr($target,8)]['image']=$path;else $new[$target]=$path;
-     save_content($new);$c=content();$notice='Фото загружено и установлено.';
-   }
- }catch(Throwable $ex){$error=$ex instanceof JsonException?'Ошибка синтаксиса JSON.':$ex->getMessage();}
-}
-$labels=['brand'=>'Название компании','hero_title'=>'Заголовок первого экрана','hero_description'=>'Описание первого экрана','phone'=>'Телефон','email'=>'Почта для посетителей','area'=>'География выезда','maps_url'=>'Ссылка на Яндекс Карты','telegram_url'=>'Telegram: подтверждённая HTTPS-ссылка или пусто','about_title'=>'Заголовок «О компании»','about_text'=>'Описание компании','about_subtitle'=>'Подзаголовок принципов работы','services_intro'=>'Вступление к услугам','services_note'=>'Примечание к услугам','operator_address'=>'Адрес оператора для документов','guarantee_terms'=>'Условия гарантии'];
-function field(string $name,string $label,string $value,bool $large=false):void{?><label><?=e($label)?><?php if($large): ?><textarea name="<?=e($name)?>" rows="3"><?=e($value)?></textarea><?php else: ?><input name="<?=e($name)?>" value="<?=e($value)?>"><?php endif; ?></label><?php }
+require __DIR__ . '/../app/bootstrap.php';
+require ROOT . '/app/admin-auth.php';
+require ROOT . '/app/admin-schema.php';
+require ROOT . '/app/leads.php';
 
-function edit_tables(string $prefix,array $tables):void{
- foreach($tables as $t=>$table){
-   field($prefix."[$t][title]",'Название таблицы',$table['title']);
-   ?><div class="edit-table-wrap"><table class="edit-table"><thead><tr><?php foreach($table['columns'] as $j=>$column): ?><th><?=e($column)?><input type="hidden" name="<?=e($prefix."[$t][columns][$j]")?>" value="<?=e($column)?>"></th><?php endforeach; ?></tr></thead><tbody><?php foreach($table['rows'] as $r=>$row): ?><tr><?php foreach($row as $j=>$value): ?><td><input aria-label="<?=e($table['title'].' · '.$row[0].' · '.$table['columns'][$j])?>" name="<?=e($prefix."[$t][rows][$r][$j]")?>" value="<?=e($value)?>"></td><?php endforeach; ?></tr><?php endforeach; ?></tbody></table></div><?php
- }
+common_headers();
+header('Cache-Control: no-store');
+header('X-Robots-Tag: noindex, nofollow');
+header("Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+
+$local = in_array($_SERVER['REMOTE_ADDR'] ?? '', ['127.0.0.1', '::1'], true)
+    && in_array(explode(':', $_SERVER['HTTP_HOST'] ?? '')[0], ['localhost', '127.0.0.1'], true);
+if ($config['force_https'] && !$local && (empty($_SERVER['HTTPS']) || $_SERVER['HTTPS'] === 'off')) {
+    http_response_code(403);
+    exit('Для входа в админку используйте HTTPS.');
 }
-?><!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Управление сайтом — Чистота в доме</title><link rel="icon" href="/assets/logo.png"><style>*{box-sizing:border-box}body{font:14px/1.6 Arial,sans-serif;margin:0;background:#f4f6ee;color:#294c3e}main{max-width:1000px;margin:auto;padding:32px 20px}h1,h2{font-family:Georgia,serif;font-weight:400}h1{font-size:32px}h2{font-size:25px}header{display:flex;justify-content:space-between;align-items:center;gap:20px}section{padding:25px;background:white;margin:20px 0;border:1px solid #dfe4d5}label{display:block;font-size:12px;margin:12px 0}input,textarea,select{display:block;width:100%;font:14px/1.5 Arial,sans-serif;border:1px solid #c5ceba;padding:10px;margin-top:5px;color:#294c3e}textarea{resize:vertical}button,.button{display:inline-block;background:#294c3e;color:#fff;border:0;padding:12px 20px;font:13px Arial,sans-serif;cursor:pointer;text-decoration:none}input:focus,textarea:focus,select:focus,button:focus-visible{outline:2px solid #b49659;outline-offset:2px}.error,.notice{padding:15px 20px;background:#e4ecd9}.error{color:#8b3326;background:#fae9e4}.row{display:grid;grid-template-columns:1fr 1fr;gap:20px}.service{padding:15px 0;border-top:1px solid #e0e5d8}.hint{color:#71806c;font-size:12px}.sticky-save{position:sticky;bottom:10px;background:#eef2e6;padding:12px;border:1px solid #cbd5be;display:flex;gap:20px;align-items:center}.json{font-family:monospace;font-size:12px;min-height:400px}.photo-preview{width:150px;height:100px;object-fit:cover}code{font-size:12px;overflow-wrap:anywhere}.login{max-width:460px;margin:70px auto}.inline-form{margin:0}@media(max-width:600px){.row{grid-template-columns:1fr}header{display:block}section{padding:18px}.sticky-save{display:block}.sticky-save span{display:block;margin-top:8px}}.edit-table-wrap{overflow-x:auto;margin-bottom:25px}.edit-table{border-collapse:collapse;width:100%;min-width:450px}.edit-table td,.edit-table th{padding:7px;border:1px solid #dce4d4;font-size:12px;text-align:left}.edit-table input{min-width:100px;margin:0;font-size:13px}details{margin:18px 0}summary{cursor:pointer}</style></head><body><main><header><div><a href="/">← На сайт</a><h1>Управление сайтом</h1></div><?php if($auth): ?><form method="post" class="inline-form"><input type="hidden" name="csrf" value="<?=e(csrf())?>"><button name="logout" value="1">Выйти</button></form><?php endif; ?></header><?php if($error): ?><p class="error" role="alert"><?=e($error)?></p><?php endif; ?><?php if($notice): ?><p class="notice" role="status"><?=e($notice)?></p><?php endif; ?>
-<?php if(!$configured): ?><section><h2>Первичная настройка</h2><p>Админка защищена и пока не активирована. Выполните в каталоге проекта на сервере:</p><code>php scripts/setup-admin.php admin</code><p>Задайте свой пароль длиной от 12 символов. Пароль вводится скрыто, в конфигурации сохраняется только хеш. Не размещайте каталог проекта целиком в публичной папке.</p></section>
-<?php elseif(!$auth): ?><section class="login"><h2>Вход для владельца</h2><form method="post"><input type="hidden" name="csrf" value="<?=e(csrf())?>"><label>Логин<input name="user" required autocomplete="username" maxlength="100"></label><label>Пароль<input name="password" type="password" required autocomplete="current-password" maxlength="300"></label><button name="login" value="1">Войти</button></form></section>
-<?php else: ?><p class="hint">Изменения появятся на сайте сразу после сохранения. Перед изменением длинных текстов сохраните копию content.json. Не публикуйте вымышленные отзывы и неподтверждённые цены.</p><form method="post"><input type="hidden" name="csrf" value="<?=e(csrf())?>"><section><h2>Тексты и контакты</h2><div class="row"><?php foreach($labels as $key=>$label)field($key,$label,$c[$key],in_array($key,['hero_title','hero_description','about_text','services_intro','services_note','guarantee_terms'],true)); ?></div><p class="hint">Почта доставки заявок меняется отдельно в config.local.php. Условия гарантии сохраняются для согласования; публикация через дополнительный текст FAQ.</p></section><section><h2>Наш подход к работе</h2><?php foreach($c['about_points'] as $i=>$point): ?><?php field("about_points[$i][title]",'Заголовок принципа',$point['title']);field("about_points[$i][paragraphs]",'Описание: каждый абзац с новой строки',implode("\n",$point['paragraphs']),true); ?><?php endforeach; ?></section>
-<section><h2>Акция</h2><?php foreach(['value'=>'Размер бонуса','title'=>'Заголовок акции','description'=>'Условия акции','tagline'=>'Завершающая фраза'] as $key=>$label)field("promotion[$key]",$label,$c['promotion'][$key],in_array($key,['description','tagline'])); ?></section>
-<section><h2>Услуги и цены</h2><?php foreach($c['services'] as $i=>$service): ?><div class="service"><h3><?=e($service['title'])?></h3><div class="row"><?php field("services[$i][title]",'Название',$service['title']);field("services[$i][price]",'Минимальная цена без единицы',$service['price']);field("services[$i][price_unit]",'Единица: ₽, ₽/м², ₽/створка',$service['price_unit']);field("services[$i][price_context]",'Уточнение минимальной цены (например, шторы)',$service['price_context']); ?></div><?php field("services[$i][description]",'Краткое описание',$service['description'],true);field("services[$i][note]",'Примечание',$service['note']);field("services[$i][includes]",'Общие пункты вне групп: каждый с новой строки',implode("\n",$service['includes']),true); ?><details><summary>Полный состав работ</summary><?php foreach($service['sections'] as $j=>$group){field("services[$i][sections][$j][title]",'Название группы работ',$group['title']);field("services[$i][sections][$j][items]",'Работы: каждый пункт с новой строки',implode("\n",$group['items']),true);} ?></details><details><summary>Подробные таблицы стоимости</summary><?php edit_tables("services[$i][pricing]",$service['pricing']); ?></details></div><?php endforeach; ?></section>
-<section><h2>Дополнительные услуги</h2><?php edit_tables('additional_services',$c['additional_services']);field('gift_certificate[title]','Название сертификата',$c['gift_certificate']['title']);field('gift_certificate[button]','Кнопка сертификата',$c['gift_certificate']['button']); ?></section>
-<section><h2>Персональное предложение в форме</h2><?php field('request_form[contact_heading]','Короткий заголовок',$c['request_form']['contact_heading']);field('request_form[contact_offer]','Текст предложения',$c['request_form']['contact_offer'],true); ?></section>
-<section><h2>Вопросы и ответы</h2><?php foreach($c['faq'] as $i=>$f): ?><div class="service"><?php field("faq[$i][question]",'Вопрос',$f['question']);field("faq[$i][answer]",'Ответ',$f['answer'],true); ?></div><?php endforeach; ?></section><div class="sticky-save"><button name="save" value="1">Сохранить изменения</button><span class="hint">Тексты выводятся как текст. HTML не выполняется.</span></div></form>
-<section><h2>Фотографии</h2><p class="hint">JPEG, PNG, WebP до 5 МБ. Загружайте изображения, на использование которых у вас есть право. После загрузки выбранное фото заменится сразу.</p><form method="post" enctype="multipart/form-data"><input type="hidden" name="csrf" value="<?=e(csrf())?>"><label>Куда поставить фото<select name="target"><option value="hero_image">Первый экран</option><option value="about_image">О компании</option><?php foreach($c['services'] as $i=>$s): ?><option value="service-<?=$i?>"><?=e($s['title'])?></option><?php endforeach; ?></select></label><label>Изображение<input type="file" name="image" accept="image/jpeg,image/png,image/webp" required></label><button name="upload" value="1">Загрузить и установить</button></form></section>
-<section><details><summary>Все данные: отзывы, кейсы, новые услуги (JSON)</summary><p class="hint">Редактор для расширенной настройки. Отзывы: name, quote, source. Кейсы: title, description, image. Для фото кейса сначала загрузите файл через блок выше и скопируйте его путь /uploads/… из JSON. Ошибочный формат не сохранится.</p><form method="post"><input type="hidden" name="csrf" value="<?=e(csrf())?>"><textarea class="json" name="content_json" spellcheck="false"><?=e(json_encode($c,JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES))?></textarea><button name="save_json" value="1">Сохранить все данные</button></form></details></section>
-<?php endif; ?></main></body></html>
+
+$tabs = [
+    'leads' => 'Заявки', 'general' => 'Общие настройки', 'home' => 'Главная', 'services' => 'Услуги и цены',
+    'offers' => 'Акции и доп. услуги', 'about' => 'О компании', 'portfolio' => 'Работы и отзывы',
+    'faq' => 'Вопросы', 'request' => 'Форма заявки', 'documents' => 'Документы',
+];
+$tab = $_GET['tab'] ?? 'leads';
+if (!is_string($tab) || !isset($tabs[$tab])) {
+    $tab = 'leads';
+}
+function admin_link(string $tab, array $query = []): string
+{
+    return '/admin.php?' . http_build_query(['tab' => $tab] + $query);
+}
+
+function admin_redirect(string $tab, string $message = '', array $query = []): never
+{
+    if ($message !== '') {
+        $_SESSION['notice'] = $message;
+    }
+    header('Location: ' . admin_link($tab, $query), true, 303);
+    exit;
+}
+
+function post_text(string $name): string
+{
+    if (!is_string($_POST[$name] ?? null)) {
+        throw new InvalidArgumentException('Проверьте поля формы.');
+    }
+    return trim($_POST[$name]);
+}
+
+function post_password(string $name): string
+{
+    return is_string($_POST[$name] ?? null) ? $_POST[$name] : '';
+}
+
+start_session();
+$credentials = admin_credentials($config);
+$configured = admin_ready($credentials);
+$authenticated = $configured && is_string($_SESSION['admin_key'] ?? null)
+    && hash_equals(admin_session_key($credentials), $_SESSION['admin_key'])
+    && time() - ($_SESSION['last_activity'] ?? 0) <= 1800;
+if ($authenticated) {
+    $_SESSION['last_activity'] = time();
+} else {
+    unset($_SESSION['admin_key'], $_SESSION['last_activity']);
+}
+$setupAvailable = !$configured && is_file(ADMIN_SETUP_HASH);
+$notice = $_SESSION['notice'] ?? '';
+unset($_SESSION['notice']);
+$error = '';
+$editorDraft = null;
+$editorRevision = null;
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $action = $_POST['action'] ?? '';
+    $upload = $action === 'upload_image';
+    try {
+        if (!check_csrf()) {
+            http_response_code(403);
+            throw new InvalidArgumentException('Сессия обновилась. Обновите страницу и повторите действие.');
+        }
+        if ($action === 'logout' && $authenticated) {
+            $_SESSION = [];
+            session_regenerate_id(true);
+            admin_redirect('leads');
+        }
+        if ($action === 'setup' && $setupAvailable) {
+            if (!rate_allowed('admin-setup', 5, 900)) {
+                http_response_code(429);
+                throw new InvalidArgumentException('Слишком много попыток. Повторите через 15 минут.');
+            }
+            $credentials = create_admin($config, post_text('setup_token'), post_text('user'), post_password('password'), post_password('repeat'));
+            establish_admin_session($credentials);
+            admin_redirect('request', 'Вход настроен. Здесь можно включить приём заявок.');
+        }
+        if ($action === 'login' && $configured) {
+            if (!rate_allowed('admin', 5, 900)) {
+                http_response_code(429);
+                throw new InvalidArgumentException('Слишком много попыток. Повторите через 15 минут.');
+            }
+            $password = $_POST['password'] ?? null;
+            if (!is_string($password) || strlen($password) > 300 || !hash_equals($credentials['user'], post_text('user'))
+                || !password_verify($password, $credentials['password_hash'])) {
+                http_response_code(401);
+                throw new InvalidArgumentException('Неверный логин или пароль.');
+            }
+            establish_admin_session($credentials);
+            admin_redirect('leads');
+        }
+        if (!$authenticated) {
+            http_response_code(403);
+            throw new InvalidArgumentException('Войдите в админку.');
+        }
+        switch ($action) {
+            case 'save':
+                $schema = admin_schema($tab);
+                $raw = $_POST['values'] ?? null;
+                if (!$schema || !is_string($raw) || strlen($raw) > 800000) {
+                    throw new InvalidArgumentException('Не удалось прочитать поля редактора.');
+                }
+                $values = json_decode($raw, true, 32, JSON_THROW_ON_ERROR);
+                if (!is_array($values)) {
+                    throw new InvalidArgumentException('Проверьте поля редактора.');
+                }
+                $updated = merge_editor_content(content(), $schema, $values);
+                $editorDraft = editor_content($updated, $schema);
+                $editorRevision = post_text('revision');
+                save_content($updated, $editorRevision);
+                admin_redirect($tab, 'Изменения опубликованы.');
+            case 'upload_image':
+                $path = upload_admin_image(__DIR__);
+                header('Content-Type: application/json; charset=utf-8');
+                echo json_encode(['path' => $path], JSON_THROW_ON_ERROR);
+                exit;
+            case 'update_lead':
+                $id = post_text('id');
+                manage_lead($id, 'update', post_text('status'), post_text('note'));
+                admin_redirect('leads', 'Заявка обновлена.', ['id' => $id]);
+            case 'delete_lead':
+                manage_lead(post_text('id'), 'delete');
+                admin_redirect('leads', 'Заявка удалена.');
+            default:
+                throw new InvalidArgumentException('Неизвестное действие.');
+        }
+    } catch (Throwable $exception) {
+        $expected = $exception instanceof InvalidArgumentException || $exception instanceof DomainException;
+        $error = $expected ? $exception->getMessage() : 'Не удалось выполнить действие. Попробуйте ещё раз.';
+        if (!$expected) {
+            error_log('Admin operation failed: ' . get_class($exception));
+        }
+        if ($upload) {
+            http_response_code(http_response_code() >= 400 ? http_response_code() : ($expected ? 422 : 500));
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode(['error' => $error], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if (http_response_code() < 400) {
+            http_response_code($exception instanceof DomainException ? 409 : ($expected ? 422 : 500));
+        }
+    }
+}
+
+$c = content($revision);
+$editor = null;
+$lead = null;
+$leadList = null;
+$status = '';
+$search = '';
+if ($authenticated && $tab === 'leads') {
+    try {
+        $id = $_GET['id'] ?? '';
+        if (is_string($id) && $id !== '') {
+            $lead = get_lead($id);
+        } else {
+            $status = is_string($_GET['status'] ?? null) && isset(LEAD_STATUSES[$_GET['status']]) ? $_GET['status'] : '';
+            $search = is_string($_GET['q'] ?? null) ? mb_substr(trim($_GET['q']), 0, 100) : '';
+            $page = is_string($_GET['page'] ?? null) ? (int) $_GET['page'] : 1;
+            $leadList = list_leads($status, $search, $page);
+        }
+    } catch (InvalidArgumentException $exception) {
+        http_response_code(404);
+        $error = $exception->getMessage();
+    } catch (Throwable $exception) {
+        http_response_code(500);
+        $error = 'Не удалось открыть журнал заявок.';
+        error_log('Lead journal error: ' . get_class($exception));
+    }
+} elseif ($authenticated) {
+    $schema = admin_schema($tab);
+    $editor = [
+        'schema' => $schema, 'values' => $editorDraft ?? editor_content($c, $schema),
+        'revision' => $editorRevision ?? $revision,
+    ];
+}
+
+function admin_csrf_field(): void
+{
+    echo '<input type="hidden" name="csrf" value="' . e(csrf()) . '">';
+}
+
+function lead_date(string $date): string
+{
+    return (new DateTimeImmutable($date))->setTimezone(new DateTimeZone('Asia/Yekaterinburg'))->format('d.m.Y H:i');
+}
+?>
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="robots" content="noindex,nofollow">
+    <title>Управление сайтом · <?= e($c['brand']) ?></title>
+    <link rel="icon" href="<?= e(image_path($c['logo_image'])) ?>">
+    <link rel="stylesheet" href="/assets/admin.css?v=1">
+    <?php if ($authenticated): ?><script src="/assets/admin.js?v=1" defer></script><?php endif; ?>
+</head>
+<body>
+<header class="top">
+    <div class="top-inner">
+        <a class="wordmark" href="<?= e(admin_link('leads')) ?>"><?= e($c['brand']) ?></a>
+        <div class="top-actions">
+            <a href="/" target="_blank" rel="noopener">Открыть сайт ↗</a>
+            <?php if ($authenticated): ?>
+                <form method="post"><?php admin_csrf_field(); ?><button class="secondary" name="action" value="logout">Выйти</button></form>
+            <?php endif; ?>
+        </div>
+    </div>
+</header>
+<div class="<?= $authenticated ? 'layout' : 'login-layout' ?>">
+<?php if ($authenticated): ?>
+    <nav aria-label="Разделы админки" class="sidebar">
+        <?php foreach ($tabs as $key => $label): ?>
+            <a href="<?= e(admin_link($key)) ?>" <?= $key === $tab ? 'aria-current="page"' : '' ?>><?= e($label) ?></a>
+        <?php endforeach; ?>
+    </nav>
+<?php endif; ?>
+<main>
+    <?php if ($notice): ?><p class="flash success" role="status"><?= e($notice) ?></p><?php endif; ?>
+    <?php if ($error): ?><p class="flash error" role="alert"><?= e($error) ?></p><?php endif; ?>
+    <?php if (!$authenticated): ?>
+        <section class="panel login">
+            <?php if ($setupAvailable): ?>
+                <h1>Настройка входа</h1>
+                <p class="muted">Введите одноразовый код установки и придумайте свой пароль.</p>
+                <form method="post">
+                    <?php admin_csrf_field(); ?>
+                    <label>Одноразовый код<input name="setup_token" required minlength="64" maxlength="64" autocomplete="off" spellcheck="false"></label>
+                    <label>Логин<input name="user" required minlength="3" maxlength="60" autocomplete="username"></label>
+                    <label>Пароль<input name="password" type="password" required minlength="12" maxlength="72" autocomplete="new-password"></label>
+                    <label>Повторите пароль<input name="repeat" type="password" required minlength="12" maxlength="72" autocomplete="new-password"></label>
+                    <button name="action" value="setup">Создать вход</button>
+                </form>
+            <?php elseif ($configured): ?>
+                <h1>Вход в админку</h1>
+                <form method="post">
+                    <?php admin_csrf_field(); ?>
+                    <label>Логин<input name="user" required autocomplete="username" maxlength="100"></label>
+                    <label>Пароль<input name="password" type="password" required autocomplete="current-password" maxlength="300"></label>
+                    <button name="action" value="login">Войти</button>
+                </form>
+            <?php else: ?>
+                <h1>Вход ещё не настроен</h1>
+                <p>Владелец может настроить вход с помощью одноразового кода установки или команды <code>php scripts/setup-admin.php</code> на сервере.</p>
+            <?php endif; ?>
+        </section>
+    <?php else: ?>
+        <h1><?= e($tabs[$tab]) ?></h1>
+        <?php if ($tab === 'leads'): ?>
+            <?php require ROOT . '/app/admin-leads-view.php'; ?>
+        <?php else: ?>
+            <?php if ($tab === 'home'): ?><p class="muted">Первый экран всегда на месте. Остальные разделы можно переставить или скрыть.</p><?php endif; ?>
+            <?php if ($tab === 'documents'): ?><p class="muted">Пустой текст оставляет исходный документ. В своём тексте можно разделить абзацы пустой строкой, а заголовки начать с «## ».</p><?php endif; ?>
+            <form method="post" id="content-editor" enctype="multipart/form-data">
+                <?php admin_csrf_field(); ?>
+                <input type="hidden" name="action" value="save">
+                <input type="hidden" name="revision" value="<?= e($editor['revision']) ?>">
+                <input type="hidden" name="values">
+                <div id="editor-fields"></div>
+                <div class="save-bar"><button type="submit" disabled>Сохранить и опубликовать</button><span class="muted" role="status" id="editor-status"></span></div>
+                <noscript><p>Включите JavaScript, чтобы редактировать содержимое.</p></noscript>
+            </form>
+            <script type="application/json" id="editor-data"><?= json_encode($editor, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_THROW_ON_ERROR) ?></script>
+        <?php endif; ?>
+    <?php endif; ?>
+</main>
+</div>
+</body>
+</html>

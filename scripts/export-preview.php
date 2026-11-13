@@ -40,5 +40,9 @@ file_put_contents($out.'/robots.txt', "User-agent: *\nDisallow: /\n");
 // No demo sitemap is advertised; every HTML page has an explicit noindex directive.
 file_put_contents($out.'/.nojekyll', '');
 if (!is_dir($out.'/assets')) mkdir($out.'/assets', 0755, true);
-foreach (glob(ROOT.'/public/assets/*') as $file) copy($file, $out.'/assets/'.basename($file));
+foreach (glob(ROOT . '/public/assets/*') as $file) {
+    if (!str_starts_with(basename($file), 'admin.')) {
+        copy($file, $out . '/assets/' . basename($file));
+    }
+}
 fwrite(STDOUT, "Static demo exported to $out\n");

@@ -1,0 +1,1 @@
+<div class="subscription" data-reveal><div class="subscription-number"><?=e($c['promotion']['value'])?></div><div><h3><?=e($c['promotion']['title'])?></h3><p><?=e($c['promotion']['description'])?></p><p class="promotion-tagline"><?=e($c['promotion']['tagline'])?></p></div><a class="button button-outline main-action" href="<?=e($bookingHref)?>"><?= site_copy('book') ?></a></div>

@@ -1,0 +1,1 @@
+<div class="container benefits-strip"><?php foreach ($c['benefits'] as $i => $benefit): ?><div><span><?=str_pad((string) ($i + 1), 2, '0', STR_PAD_LEFT)?></span><p><?=e($benefit['title'])?><br><small><?=e($benefit['text'])?></small></p></div><?php endforeach; ?></div>

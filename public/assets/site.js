@@ -94,7 +94,12 @@ function premisesRequirements(){
 $('#lead-service').addEventListener('change',premisesRequirements);premisesRequirements();
 const phone=$('#lead-phone');phone.addEventListener('input',()=>phone.setCustomValidity(''));
 let contacts={};try{contacts=JSON.parse($('#contact-data').textContent)}catch{}
-let csrfToken='',submitting=false;
+let csrfToken='',submitting=false,requestKey='';
+function newRequestKey(){
+ const bytes=crypto.getRandomValues(new Uint8Array(16));
+ return Array.from(bytes,byte=>byte.toString(16).padStart(2,'0')).join('');
+}
+form.addEventListener('input',()=>{if(!submitting)requestKey='';});
 async function token(){
  const response=await fetch('/api/token.php',{credentials:'same-origin',cache:'no-store'});
  if(!response.ok)throw Error('Не удалось подготовить форму.');
@@ -104,7 +109,12 @@ async function token(){
 }
 async function sendBooking(){
  if(!csrfToken)await token();
- const post=()=>fetch(form.action,{method:'POST',body:new FormData(form),credentials:'same-origin',headers:{'Accept':'application/json'}});
+ requestKey ||= newRequestKey();
+ const post=()=>{
+  const data=new FormData(form);
+  data.set('request_key',requestKey);
+  return fetch(form.action,{method:'POST',body:data,credentials:'same-origin',headers:{'Accept':'application/json'}});
+ };
  let response=await post();
  // CSRF is checked before delivery, so only this rejection can safely be retried.
  if(response.status===403){csrfToken='';await token();response=await post();}
@@ -127,7 +137,7 @@ form.addEventListener('submit',async event=>{
  try{
   const data=await sendBooking();
   status.classList.add('success');status.textContent=data.message;
-  form.reset();csrfToken='';goal('lead_sent');token().catch(()=>{});
+  form.reset();premisesRequirements();requestKey='';csrfToken='';goal('lead_sent');token().catch(()=>{});
  }catch(error){
   status.classList.add('error');status.textContent=`${error.message||'Не удалось отправить заявку.'} Вы можете позвонить: ${contacts.phone}.`;
  }finally{

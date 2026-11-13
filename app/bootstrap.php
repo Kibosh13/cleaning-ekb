@@ -2,10 +2,54 @@
 declare(strict_types=1);
 const ROOT = __DIR__ . '/..';
 const CONTENT_FILE = ROOT . '/data/content.json';
+require __DIR__ . '/storage.php';
+require __DIR__ . '/content-defaults.php';
 $config = require ROOT . '/config.example.php';
 if (!is_preview() && is_file(ROOT . '/config.local.php')) $config = array_replace($config, require ROOT . '/config.local.php');
 function e(mixed $v): string { return htmlspecialchars((string)$v, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
-function content(): array { return json_decode((string)file_get_contents(CONTENT_FILE), true, 512, JSON_THROW_ON_ERROR); }
+function content(?string &$revision = null): array
+{
+    $raw = file_get_contents(CONTENT_FILE);
+    if ($raw === false) {
+        throw new RuntimeException('Не удалось прочитать содержимое сайта.');
+    }
+    $revision = hash('sha256', $raw);
+    $content = json_decode($raw, true, 64, JSON_THROW_ON_ERROR);
+    $defaults = content_defaults();
+    $content += $defaults;
+    $sectionIds = array_column($content['sections'], 'id');
+    foreach ($defaults['sections'] as $section) {
+        if (!in_array($section['id'], $sectionIds, true)) {
+            $content['sections'][] = $section;
+        }
+    }
+    foreach ($content['services'] as &$service) {
+        $categories = explode(' ', $service['group']);
+        $service['group'] = implode(' ', array_intersect(['home', 'business', 'special'], $categories));
+    }
+    unset($service);
+    $content['copy'] = array_replace($defaults['copy'], $content['copy']);
+    $content['documents'] = array_replace($defaults['documents'], $content['documents']);
+    return $content;
+}
+function leads_enabled(array $content): bool
+{
+    foreach ($content['sections'] as $section) {
+        if ($section['id'] === 'request') {
+            return !is_preview() && $section['visible'] && lead_switch($content);
+        }
+    }
+    return false;
+}
+function lead_switch(array $content): bool
+{
+    global $config;
+    return $content['accept_leads'] ?? $config['leads_enabled'];
+}
+function content_revision(): string
+{
+    return hash_file('sha256', CONTENT_FILE);
+}
 function is_preview(): bool { return defined('STATIC_PREVIEW') && STATIC_PREVIEW; }
 function page_url(string $name): string { return '/' . $name . (is_preview() ? '.html' : ''); }
 function image_path(string $v): string {
@@ -36,30 +80,33 @@ function start_session(): void {
 }
 function csrf(): string { start_session(); return $_SESSION['csrf'] ??= bin2hex(random_bytes(32)); }
 function check_csrf(): bool { start_session(); return is_string($_POST['csrf'] ?? null) && is_string($_SESSION['csrf'] ?? null) && hash_equals($_SESSION['csrf'], $_POST['csrf']); }
-function save_content(array $data): void {
+function save_content(array $data, string $revision): void
+{
     validate_content($data);
-    $lock = fopen(ROOT . '/data/content.lock', 'c');
-    if (!$lock || !flock($lock, LOCK_EX)) throw new RuntimeException('Не удалось заблокировать файл.');
-    try {
-        $tmp = tempnam(ROOT . '/data', 'content-');
-        if (!$tmp || file_put_contents($tmp, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)) === false) throw new RuntimeException('Ошибка записи.');
-        chmod($tmp, 0640);
-        if (!rename($tmp, CONTENT_FILE)) throw new RuntimeException('Ошибка сохранения.');
-    } finally { flock($lock, LOCK_UN); fclose($lock); }
+    with_data_lock('content', function () use ($data, $revision): void {
+        if (!hash_equals(content_revision(), $revision)) {
+            throw new DomainException('Сайт уже изменился. Обновите страницу перед сохранением.');
+        }
+        write_json_file(CONTENT_FILE, $data);
+    });
 }
 function validate_content(array $d): void {
     foreach (['brand','hero_title','hero_description','hero_image','phone','email','area','maps_url','telegram_url','about_title','about_text','about_subtitle','about_image','services_intro','services_note','operator','inn','operator_address','guarantee_terms'] as $key) {
         if (!isset($d[$key]) || !is_string($d[$key]) || mb_strlen($d[$key]) > 6000) throw new InvalidArgumentException('Проверьте поле: '.$key);
     }
+    foreach ($d['custom_blocks'] as $block) {
+        if ($block['image'] !== '' && image_path($block['image']) !== $block['image']) {
+            throw new InvalidArgumentException('Проверьте изображение дополнительного блока.');
+        }
+    }
     if (!filter_var($d['email'], FILTER_VALIDATE_EMAIL) || !preg_match('/^\+?[\d\s()\-]{10,25}$/', $d['phone'])) throw new InvalidArgumentException('Проверьте контакты.');
     foreach(['maps_url','telegram_url'] as $k) if($d[$k]!=='' && !https_url($d[$k])) throw new InvalidArgumentException('Нужна HTTPS-ссылка: '.$k);
-    foreach(['hero_image','about_image'] as $k) if(image_path($d[$k])!==$d[$k]) throw new InvalidArgumentException('Недопустимый путь изображения.');
+    foreach(['hero_image','about_image','works_image','logo_image'] as $k) if(image_path($d[$k])!==$d[$k]) throw new InvalidArgumentException('Недопустимый путь изображения.');
     foreach(['services','faq','reviews','cases'] as $k) if(!isset($d[$k]) || !is_array($d[$k]) || count($d[$k])>30) throw new InvalidArgumentException('Проверьте раздел: '.$k);
-    if(count($d['services'])<1 || count($d['faq'])<1) throw new InvalidArgumentException('Добавьте услуги и FAQ.');
     $ids=[];
     foreach($d['services'] as $s){
         foreach(['id','title','group','description','price','image','note'] as $k) if(!isset($s[$k]) || !is_string($s[$k]) || mb_strlen($s[$k])>3000) throw new InvalidArgumentException('Некорректная услуга.');
-        if(!preg_match('/^[a-z0-9-]{1,40}$/D',$s['id']) || isset($ids[$s['id']])) throw new InvalidArgumentException('ID услуг должны быть уникальными.');
+        if(!preg_match('/^[a-z0-9-]{1,40}$/D',$s['id']) || isset($ids[$s['id']]) || in_array($s['id'], ['gift-certificate','additional'], true)) throw new InvalidArgumentException('ID услуг должны быть уникальными.');
         $ids[$s['id']]=true;
         if(!preg_match('/^(home|business|special)( (home|business|special))*$/D',$s['group'])) throw new InvalidArgumentException('Неизвестная группа услуги.');
         if(image_path($s['image'])!==$s['image'] || !is_array($s['includes']) || count($s['includes'])>20) throw new InvalidArgumentException('Проверьте фото и состав услуги.');
@@ -99,7 +146,7 @@ function validate_content(array $d): void {
     foreach($d['faq'] as $f) foreach(['question','answer'] as $k) if(!is_string($f[$k]??null) || mb_strlen($f[$k])>6000) throw new InvalidArgumentException('Проверьте FAQ.');
     foreach($d['reviews'] as $r) {
         foreach(['name','quote','source'] as $k) if(!is_string($r[$k]??null) || mb_strlen($r[$k])>3000) throw new InvalidArgumentException('Проверьте отзыв.');
-        if(!https_url($r['source'])) throw new InvalidArgumentException('Укажите HTTPS-источник отзыва.');
+        if($r['source'] !== '' && !https_url($r['source'])) throw new InvalidArgumentException('Укажите HTTPS-источник отзыва.');
     }
     foreach($d['cases'] as $c) {
         foreach(['title','description','image'] as $k) if(!is_string($c[$k]??null) || mb_strlen($c[$k])>3000) throw new InvalidArgumentException('Проверьте кейс.');
